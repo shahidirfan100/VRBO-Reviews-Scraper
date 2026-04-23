@@ -1,0 +1,63 @@
+{
+  "actorSpecification": 1,
+  "fields": {},
+  "views": {
+    "overview": {
+      "title": "Overview",
+      "transformation": {
+        "fields": [
+          "property_id",
+          "review_id",
+          "rating_label",
+          "author",
+          "title",
+          "review_text",
+          "trip_summary",
+          "source_type",
+          "source_url"
+        ]
+      },
+      "display": {
+        "component": "table",
+        "properties": {
+          "property_id": {
+            "label": "Property ID",
+            "format": "text"
+          },
+          "review_id": {
+            "label": "Review ID",
+            "format": "text"
+          },
+          "rating_label": {
+            "label": "Rating",
+            "format": "text"
+          },
+          "author": {
+            "label": "Author",
+            "format": "text"
+          },
+          "title": {
+            "label": "Title",
+            "format": "text"
+          },
+          "review_text": {
+            "label": "Review",
+            "format": "text"
+          },
+          "trip_summary": {
+            "label": "Trip Summary",
+            "format": "text"
+          },
+          "source_type": {
+            "label": "Source",
+            "format": "text"
+          },
+          "source_url": {
+            "label": "API URL",
+            "format": "link"
+          }
+        }
+      }
+    }
+  }
+}
