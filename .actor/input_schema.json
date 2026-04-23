@@ -32,20 +32,6 @@
       "default": 10,
       "editor": "number"
     },
-    "locale": {
-      "title": "Locale",
-      "type": "string",
-      "description": "GraphQL context locale, e.g. en_US.",
-      "editor": "textfield",
-      "default": "en_US"
-    },
-    "currency": {
-      "title": "Currency",
-      "type": "string",
-      "description": "GraphQL context currency, e.g. USD.",
-      "editor": "textfield",
-      "default": "USD"
-    },
     "proxyConfiguration": {
       "title": "Proxy configuration",
       "type": "object",

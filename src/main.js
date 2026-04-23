@@ -8,6 +8,7 @@ const GRAPHQL_URL = 'https://www.expedia.com/graphql';
 const DETAIL_PAGE_SIZE = 10;
 const DEFAULT_RESULTS_WANTED = 20;
 const DEFAULT_MAX_PAGES = 10;
+const DEFAULT_PUSH_BATCH_SIZE = 100;
 const MAX_API_ATTEMPTS = 6;
 const MAX_WARMUP_ATTEMPTS = 3;
 
@@ -74,6 +75,69 @@ function cleanString(value) {
     return trimmed.length ? trimmed : undefined;
 }
 
+function sanitizeUrlLikeString(value) {
+    const raw = cleanString(value);
+    if (!raw) return undefined;
+
+    return raw
+        .replace(/[\u200B-\u200D\uFEFF]/g, '')
+        .replace(/^["'(<\s]+/, '')
+        .replace(/["'>)\s]+$/, '');
+}
+
+function parseMaybeUrl(value) {
+    const cleaned = sanitizeUrlLikeString(value);
+    if (!cleaned) return undefined;
+
+    const candidate = /^[a-z][a-z\d+\-.]*:\/\//i.test(cleaned)
+        ? cleaned
+        : `https://${cleaned.replace(/^\/+/, '')}`;
+
+    try {
+        return new URL(candidate);
+    } catch {
+        return undefined;
+    }
+}
+
+function normalizePropertyIdCandidate(value) {
+    const normalized = cleanString(String(value ?? ''));
+    if (!normalized) return undefined;
+
+    const digits = normalized.replace(/\D+/g, '');
+    return digits.length >= 5 ? digits : undefined;
+}
+
+function extractNumericCandidates(text) {
+    const normalized = cleanString(text);
+    if (!normalized) return [];
+
+    const matches = normalized.match(/\d{5,}/g) ?? [];
+    return [...new Set(matches)];
+}
+
+function pickBestPropertyIdCandidate(candidates) {
+    if (!Array.isArray(candidates) || !candidates.length) return undefined;
+
+    const sorted = [...new Set(candidates)]
+        .map((item) => normalizePropertyIdCandidate(item))
+        .filter(Boolean)
+        .sort((a, b) => b.length - a.length);
+
+    return sorted[0];
+}
+
+function safeDecode(value) {
+    const raw = cleanString(value);
+    if (!raw) return '';
+
+    try {
+        return decodeURIComponent(raw);
+    } catch {
+        return raw;
+    }
+}
+
 function deepClean(value) {
     if (Array.isArray(value)) {
         const cleaned = value.map((item) => deepClean(item)).filter((item) => item !== undefined);
@@ -95,34 +159,56 @@ function deepClean(value) {
 }
 
 function extractPropertyId(input) {
-    const inputUrl = cleanString(input.url);
-    if (inputUrl) {
-        let parsed;
-        try {
-            parsed = new URL(inputUrl);
-        } catch {
-            parsed = undefined;
-        }
+    // Respect direct user input first when propertyId is explicitly provided.
+    const direct = normalizePropertyIdCandidate(input.propertyId);
+    if (direct) return direct;
 
-        if (parsed) {
-            const queryCandidates = ['expediaPropertyId', 'selected', 'propertyId', 'id'];
-            for (const key of queryCandidates) {
-                const value = cleanString(parsed.searchParams.get(key));
-                if (value) return value.replace(/\D+/g, '');
-            }
+    const rawUrl = sanitizeUrlLikeString(input.url);
+    if (!rawUrl) return undefined;
 
-            const expediaPathMatch = parsed.pathname.match(/\.h(\d+)\./i);
-            if (expediaPathMatch) return expediaPathMatch[1];
+    const parsed = parseMaybeUrl(rawUrl);
+    const highConfidence = [];
 
-            const genericPathMatch = parsed.pathname.match(/(?:^|\/)(\d{5,})(?:$|[/?#])/);
-            if (genericPathMatch) return genericPathMatch[1];
-        }
+    const namedParamPattern = /(expediaPropertyId|selected|propertyId|hotelId|listingId)=([^&#]+)/gi;
+    for (const match of rawUrl.matchAll(namedParamPattern)) {
+        const candidate = normalizePropertyIdCandidate(safeDecode(match[2] ?? ''));
+        if (candidate) highConfidence.push(candidate);
     }
 
-    const direct = cleanString(input.propertyId);
-    if (direct) return direct.replace(/\D+/g, '');
+    if (parsed) {
+        const queryCandidates = ['expediaPropertyId', 'selected', 'propertyId', 'hotelId', 'listingId', 'id'];
+        for (const key of queryCandidates) {
+            const candidate = normalizePropertyIdCandidate(parsed.searchParams.get(key));
+            if (candidate) highConfidence.push(candidate);
+        }
 
-    return undefined;
+        const expediaPathMatch = parsed.pathname.match(/\.h(\d+)\./i);
+        if (expediaPathMatch?.[1]) highConfidence.push(expediaPathMatch[1]);
+
+        const vrboPathMatch = parsed.pathname.match(/(?:^|\/)(\d{5,})(?:$|[/?#])/);
+        if (vrboPathMatch?.[1]) highConfidence.push(vrboPathMatch[1]);
+    }
+
+    const bestHighConfidence = pickBestPropertyIdCandidate(highConfidence);
+    if (bestHighConfidence) return bestHighConfidence;
+
+    const looseCandidates = extractNumericCandidates(safeDecode(rawUrl));
+    return pickBestPropertyIdCandidate(looseCandidates);
+}
+
+function hasTargetInput(input) {
+    if (!input || typeof input !== 'object') return false;
+    return Boolean(cleanString(input.url) || normalizePropertyIdCandidate(input.propertyId));
+}
+
+async function loadFallbackInput() {
+    try {
+        const fallbackPath = new URL('../INPUT.json', import.meta.url);
+        const parsed = JSON.parse(await readFile(fallbackPath, 'utf8'));
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+        return {};
+    }
 }
 
 function buildContext(input) {
@@ -175,10 +261,20 @@ function createProxySessionId(prefix = 'vrbo') {
 }
 
 function buildPropertyUrl(inputUrl, propertyId) {
-    const fromInput = cleanString(inputUrl);
-    if (fromInput) return fromInput;
+    const parsedInputUrl = parseMaybeUrl(inputUrl)?.toString();
+    if (parsedInputUrl) return parsedInputUrl;
     if (propertyId) return `https://www.vrbo.com/${propertyId}?expediaPropertyId=${propertyId}`;
     return 'https://www.vrbo.com/';
+}
+
+async function pushDataInBatches(items, batchSize = DEFAULT_PUSH_BATCH_SIZE) {
+    const safeItems = Array.isArray(items) ? items : [];
+    const safeBatchSize = toPositiveInt(batchSize, DEFAULT_PUSH_BATCH_SIZE);
+
+    for (let offset = 0; offset < safeItems.length; offset += safeBatchSize) {
+        const batch = safeItems.slice(offset, offset + safeBatchSize);
+        await Actor.pushData(batch);
+    }
 }
 
 function extractCookiesFromHeaders(headers) {
@@ -643,16 +739,20 @@ async function requestWithRetries({ payload, headers, proxyConfiguration, operat
 }
 
 await Actor.main(async () => {
-    let input = await Actor.getInput();
-    if (!input) {
-        try {
-            const fallbackPath = new URL('../INPUT.json', import.meta.url);
-            input = JSON.parse(await readFile(fallbackPath, 'utf8'));
-            log.info('No actor input provided, using fallback values from INPUT.json');
-        } catch {
-            input = {};
+    const actorInput = await Actor.getInput();
+    let input = actorInput && typeof actorInput === 'object' ? actorInput : {};
+
+    if (!hasTargetInput(input)) {
+        const fallbackInput = await loadFallbackInput();
+        if (hasTargetInput(fallbackInput)) {
+            input = {
+                ...fallbackInput,
+                ...input,
+            };
+            log.info('No valid property target in actor input, using fallback target from INPUT.json');
         }
     }
+
     const inputUrl = cleanString(input.url);
     const propertyId = extractPropertyId(input);
     const propertyUrl = buildPropertyUrl(inputUrl, propertyId);
@@ -717,7 +817,7 @@ await Actor.main(async () => {
 
         const pageReviews = parseDetailReviews(root, {
             propertyId,
-            inputUrl,
+            inputUrl: propertyUrl,
             pageIndex,
         });
 
@@ -759,7 +859,7 @@ await Actor.main(async () => {
 
             const fallbackItems = parseOverviewFallback(fallbackRoot, {
                 propertyId,
-                inputUrl,
+                inputUrl: propertyUrl,
             });
 
             for (const item of fallbackItems) {
@@ -809,6 +909,7 @@ await Actor.main(async () => {
         throw new Error('No reviews were collected. This usually means the target blocked the request. Try Apify Proxy with RESIDENTIAL group.');
     }
 
-    await Actor.pushData(collected.slice(0, resultsWanted));
-    log.info(`Finished. Saved ${Math.min(collected.length, resultsWanted)} review records.`);
+    const outputItems = collected.slice(0, resultsWanted);
+    await pushDataInBatches(outputItems);
+    log.info(`Finished. Saved ${outputItems.length} review records.`);
 });

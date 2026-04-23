@@ -5,6 +5,7 @@ Collect detailed guest review data from VRBO property listings in a clean, analy
 ## Features
 
 - **Flexible property targeting** — Use either a listing URL or direct property identifier.
+- **Messy URL recovery** — Accepts noisy VRBO/Expedia single-property URLs and extracts property IDs reliably.
 - **Rich review coverage** — Extract review body, titles, labels, trip summaries, and response notes.
 - **Duplicate-safe output** — Automatically filters repeated records across paginated pages and fallback sources.
 - **Null-free datasets** — Removes empty values so exports are clean for BI tools and spreadsheets.
@@ -32,8 +33,6 @@ Audit large property portfolios to detect review-quality outliers quickly. Prior
 | `propertyId` | String | No | — | Direct property identifier. Takes priority when provided. |
 | `results_wanted` | Integer | No | `20` | Maximum review rows to return. |
 | `max_pages` | Integer | No | `10` | Maximum pages to request during pagination. |
-| `locale` | String | No | `en_US` | Locale context for localized review content. |
-| `currency` | String | No | `USD` | Currency context for localization consistency. |
 | `proxyConfiguration` | Object | No | `{ "useApifyProxy": true }` | Proxy settings for reliability on protected pages. |
 
 ## Output Data
