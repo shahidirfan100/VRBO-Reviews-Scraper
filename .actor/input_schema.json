@@ -8,13 +8,15 @@
       "title": "Property URL",
       "type": "string",
       "description": "VRBO or Expedia property URL. If present, actor tries to extract expediaPropertyId or related property id from it.",
-      "editor": "textfield"
+      "editor": "textfield",
+      "prefill": "https://www.vrbo.com/3101531?expediaPropertyId=88961646"
     },
     "propertyId": {
       "title": "Property ID",
       "type": "string",
       "description": "Expedia property id (recommended). This value takes priority over url parsing.",
-      "editor": "textfield"
+      "editor": "textfield",
+      "prefill": "88961646"
     },
     "results_wanted": {
       "title": "Maximum number of reviews",
@@ -22,6 +24,7 @@
       "description": "Maximum number of reviews to save.",
       "minimum": 1,
       "default": 20,
+      "prefill": 20,
       "editor": "number"
     },
     "max_pages": {
@@ -30,6 +33,7 @@
       "description": "Safety cap for paginated review requests.",
       "minimum": 1,
       "default": 10,
+      "prefill": 5,
       "editor": "number"
     },
     "proxyConfiguration": {
@@ -38,7 +42,10 @@
       "description": "Use Apify Proxy. Residential proxies are recommended for stable results.",
       "editor": "proxy",
       "default": {
-        "useApifyProxy": false
+        "useApifyProxy": true,
+        "apifyProxyGroups": [
+          "RESIDENTIAL"
+        ]
       }
     }
   },

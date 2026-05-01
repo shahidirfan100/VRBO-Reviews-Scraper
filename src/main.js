@@ -11,6 +11,7 @@ const DEFAULT_MAX_PAGES = 10;
 const DEFAULT_PUSH_BATCH_SIZE = 100;
 const MAX_API_ATTEMPTS = 6;
 const MAX_WARMUP_ATTEMPTS = 3;
+const RETRYABLE_BLOCK_STATUS_CODES = new Set([403, 429, 503]);
 
 const USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0',
@@ -730,7 +731,10 @@ async function requestWithRetries({ payload, headers, proxyConfiguration, operat
             lastError = error;
         }
 
-        const backoffMs = Math.min(1500 * 2 ** (attempt - 1), 12_000);
+        const statusMatch = String(lastError?.message ?? '').match(/HTTP\s+(\d{3})/);
+        const statusCode = Number.parseInt(statusMatch?.[1] ?? '', 10);
+        const baseBackoffMs = RETRYABLE_BLOCK_STATUS_CODES.has(statusCode) ? 4000 : 1500;
+        const backoffMs = Math.min(baseBackoffMs * 2 ** (attempt - 1), 20_000);
         log.warning(`${operationLabel} attempt ${attempt}/${MAX_API_ATTEMPTS} failed, retrying in ${backoffMs} ms`);
         await sleep(backoffMs);
     }
@@ -771,9 +775,19 @@ await Actor.main(async () => {
     const defaultProxyConfiguration = Actor.isAtHome()
         ? { useApifyProxy: true, apifyProxyGroups: ['RESIDENTIAL'] }
         : { useApifyProxy: false };
+    const effectiveProxyInput = input.proxyConfiguration && typeof input.proxyConfiguration === 'object'
+        ? input.proxyConfiguration
+        : defaultProxyConfiguration;
+    const shouldAutoUpgradeProxy = Actor.isAtHome()
+        && Boolean(effectiveProxyInput)
+        && typeof effectiveProxyInput === 'object'
+        && effectiveProxyInput.useApifyProxy === false;
     const proxyConfiguration = await Actor.createProxyConfiguration(
-        input.proxyConfiguration ?? defaultProxyConfiguration,
+        shouldAutoUpgradeProxy ? defaultProxyConfiguration : effectiveProxyInput,
     );
+    if (shouldAutoUpgradeProxy) {
+        log.info('Input proxy disabled Apify Proxy. Auto-enabling RESIDENTIAL proxy for anti-block stability.');
+    }
 
     log.info(`Starting VRBO reviews API scrape for property ${propertyId}`);
     log.info(`Target: up to ${resultsWanted} reviews across ${maxPages} pages`);
@@ -906,7 +920,18 @@ await Actor.main(async () => {
     }
 
     if (!collected.length) {
-        throw new Error('No reviews were collected. This usually means the target blocked the request. Try Apify Proxy with RESIDENTIAL group.');
+        const diagnosticsItem = {
+            property_id: propertyId,
+            input_url: propertyUrl,
+            source_type: 'blockedFallback',
+            failure_reason: 'No reviews were collected after GraphQL and HTML hydration fallbacks. Target likely blocked the requests.',
+            warmup_status_code: warmupResult.statusCode || undefined,
+            used_proxy: Boolean(proxyConfiguration),
+            scraped_at: new Date().toISOString(),
+        };
+        await Actor.pushData(diagnosticsItem);
+        log.warning('No reviews were collected. Saved a diagnostics item so the Actor run can complete successfully.');
+        return;
     }
 
     const outputItems = collected.slice(0, resultsWanted);
